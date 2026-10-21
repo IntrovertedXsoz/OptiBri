@@ -24,8 +24,15 @@
    | 3.00 | Hadamard + optimal RTN | 0.210 |
    | 4.25 | plain RTN g128 | 0.106 |
 
-### Running at session end
-- `run_e2e.py` on 2 × 512 tokens with variants ref / hrtn3 (3.0 bpw experts) / hrtn2 (2.0 bpw experts). See the result section below if it finished.
+5. **Routing locality** (exp5, layers 3/4/10): 4 consecutive tokens need 82–93% of 32 distinct experts, so expert reads barely amortize across drafted tokens. A RAM cache of the last 64 tokens' experts would hit 87%, but that is nearly every expert (tens of GB). → With ~4 GB of RAM, the speed limit is bytes/token. See PLAN.md "Speed physics".
+
+### Running at session end (left running in the background; it uses no Claude usage)
+- `run_e2e.py` on 2 × 512 tokens (Wikipedia + code). Variants: ref, hrtn3 (3.0 bpw experts), hrtn2 (2.0 bpw experts), top4 (bf16 experts, only 4 of 8 routed). ~255 s/layer, reached layer 11 by 01:09; needs ~4.5 h more.
+  Log: `scratchpad/glmcache/e2e.log`, state `scratchpad/glmcache/e2e/state.pt`, final numbers in `e2e/result.json`.
+- Observations so far (per-layer, not final):
+  - Layer 8: the quantized variants' drift doubled in one layer (hrtn3 0.069 → 0.130, hrtn2 0.149 → 0.284) while top4 didn't. Suspect a quantization-sensitive "super weight" expert in layer 8. **Check it:** find the expert/row with the largest output error there; try keeping a few weights in bf16.
+  - From layer 9 the hidden norm grows sharply (massive activations), so relative hidden drift stops being informative. Judge only by the final KL / top-1 / perplexity.
+  - The `route-agree` metric compares sorted index lists position by position and **understates** the true overlap. Replace it with set overlap.
 
 ### Notes for the next session
 - The container is ephemeral. If `scratchpad/glmcache` is gone, rerun `calib_data.py` (seconds). `run_e2e.py` must restart from layer 0 (~2 h for 78 layers).
@@ -33,4 +40,5 @@
 - The repo has no `main` branch yet, so no PR could be opened (a PR needs a base branch).
 
 ## Next goal (session 1, Wed Oct 21, 18:02 ET)
+First: if the container survived, read `e2e/result.json` (or let `run_e2e.py` resume). If it was reset, restart `run_e2e.py` immediately (~5 h; it will span sessions).
 Finish the end-to-end curve: get KL / top-1 / perplexity for 2- and 3-bit experts. This sets the per-expert error budget that "97% quality" allows. Then test the strongest ~2.2 bpw quantizer that fits the 221 GB disk (activation-aware rounding plus higher-dimensional codebooks/trellis) end to end.
