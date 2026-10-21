@@ -10,9 +10,11 @@ Status values: untested, testing, measured (keep), measured (drop), parked. Ever
 | 4 | Trade idle CPU for I/O: entropy-coded weights (ANS) decoded on the fly | Quantized weights aren't uniform; about 10–20% fewer bytes for free | untested |
 | 5 | Weights regenerated from PRNG seeds + residuals | Extreme compression ratio if any structure fits | untested (low prior given #1) |
 | 6 | Conversation-level expert pre-pass: predict the experts a reply needs, then lay them out contiguously | Turns random reads into sequential ones (SSD: 56 MB/s random vs 3.2 GB/s sequential) | untested |
-| 7 | Speculative token trees (MTP head) verified in one pass | One weight read serves k tokens. This attacks the always-on 18.1B too, not only experts. | untested |
+| 7 | Speculative token trees (MTP head) verified in one pass | One weight read serves k tokens. This attacks the always-on 18.1B too, not only experts. | **measured (partial)**. exp5: k consecutive tokens need 93% (layer 3) / 82% (layer 10) of 8k distinct experts at k=4, so expert reads barely amortize. The always-on 18.1B *does* amortize fully. Still worth it for the always-on part. |
 | 8 | Confidence-based expert/layer skipping | Fewer bytes on easy tokens | untested |
 | 9 | Training-free expert merging via calibration | Fewer unique experts | untested (low prior given #1) |
-| 10 | Cache-aware routing substitution | Higher RAM hit rate | untested |
+| 10 | Cache-aware routing substitution | Higher RAM hit rate | untested. Context from exp5: a token's experts were used in the previous 64 tokens 87% of the time, but that window covers nearly all experts of every layer (tens of GB). With ~4 GB of RAM, plain caching gives little. |
 | 11 | Attention is 13.6B of the 18.1B always-on params (o_proj alone is 100.7M/layer) | Compress attention as hard as experts, or amortize it via batching | untested |
 | 12 | Hidden-state delta streaming: process the prompt with all layers resident one layer at a time (layer-major instead of token-major) | Prompt processing reads each layer once for the whole prompt | untested; it's how the eval harness already runs |
+| 13 | Fewer experts per token (top-4 of 8, renormalized; or adaptive by router confidence) | Routed bytes per token scale linearly with experts used. This is the biggest speed lever left once caching is ruled out. | testing (run_e2e variant `top4`) |
+| 14 | Ask the user to free more RAM (16 GB installed, only ~4 GB usable) | Every extra GB can pin always-on weights | parked. Ask once results show how much RAM would buy. |

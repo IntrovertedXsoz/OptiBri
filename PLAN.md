@@ -50,3 +50,9 @@
 4. **Amortize every read across many tokens.** Prompt processing is already batched. For generation, the MTP head and speculative token trees are verified in one pass, so one read of attention, shared and expert weights serves k tokens.
 5. **I/O engine built for this SSD.** Large aligned reads, many in flight (Windows overlapped I/O / IoRing), unbuffered reads so the page file and page cache don't fight us, and decompression on the idle CPU cores.
 6. **Engine.** Start from Colibri (C, Apache 2.0) and port it to Windows with AVX2 kernels for our formats.
+
+## Speed physics (from exp5)
+- With ~4 GB of RAM, almost nothing stays resident. Every token reads its 8 routed experts per layer plus the always-on weights from the SSD.
+- Neighbouring tokens share few experts. Verifying k drafted tokens per pass mainly amortizes the **always-on** 18.1B, not the experts.
+- So time/token ≈ [routed 22.6B × bpw_e / (tokens per expert read ≈ 1.1)] + [always-on 18.1B × bpw_a / accepted tokens per pass], divided by SSD bandwidth (~4.9 GB/s with many large reads in flight).
+- Example: bpw_e = 2.3 and bpw_a = 3 with 3 accepted tokens per pass gives ≈ 5.9 + 2.3 = 8.2 GB/token, about **1.7 s/token**. Using top-4 experts would cut the first term roughly in half, to ≈ 1.1 s/token, *if* the quality holds (being measured).

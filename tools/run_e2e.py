@@ -12,7 +12,8 @@ from quant import hrtn_rot, rotate            # rotation + MSE-optimal uniform q
 torch.set_num_threads(int(os.environ.get("THREADS", os.cpu_count())))
 OUT = sys.argv[1]; os.makedirs(OUT, exist_ok=True)
 # variants return weights in the rotated basis; activations are rotated instead of unrotating weights
-VARIANTS = {"ref": None, "hrtn3": lambda w: hrtn_rot(w, 3), "hrtn2": lambda w: hrtn_rot(w, 2)}
+VARIANTS = {"ref": None, "hrtn3": lambda w: hrtn_rot(w, 3), "hrtn2": lambda w: hrtn_rot(w, 2), "top4": None}
+TOPK = {"top4": 4}   # bf16 experts, but only the 4 best-scored of the 8 routed experts (weights renormalized)
 calib = np.load(os.path.join(os.environ["GLM_CACHE"], "calib_8x1024.npy"))
 ids = np.stack([calib[3][:512], calib[7][:512]])      # one Wikipedia, one Python-code sequence
 S, T = ids.shape; cs = G.rope_cs(T)
@@ -34,7 +35,11 @@ else:
 def moe_multi(L, xs):
     out, routes = {}, {}
     for k, x in xs.items():
-        routes[k] = G.route(L, x); out[k] = G.mlp(f"model.layers.{L}.mlp.shared_experts.", x)
+        idx, wts = G.route(L, x)
+        if k in TOPK:                                    # route() returns experts sorted by (biased) score
+            n = TOPK[k]; s = wts.sum(-1, keepdim=True); idx, wts = idx[:, :n], wts[:, :n]
+            wts = wts / wts.sum(-1, keepdim=True) * s
+        routes[k] = (idx, wts); out[k] = G.mlp(f"model.layers.{L}.mlp.shared_experts.", x)
     used = sorted(set().union(*[set(r[0].flatten().tolist()) for r in routes.values()]))
     for e, w3 in G.ExpertStream(L, used):
         qcache = {}
@@ -47,7 +52,8 @@ def moe_multi(L, xs):
             a = torch.nn.functional.silu(xe @ g.T) * (xe @ u.T)
             if rot: a = rotate(a)
             out[k].index_add_(0, tok, (a @ d.T) * wts[tok, slot, None])
-    agree = {k: (routes[k][0].sort(-1).values == routes["ref"][0].sort(-1).values).float().mean().item() for k in xs}
+    agree = {k: (routes[k][0].sort(-1).values == routes["ref"][0].sort(-1).values).float().mean().item()
+             for k in xs if k not in TOPK}
     return out, agree
 
 NL = G.CFG["num_hidden_layers"]
