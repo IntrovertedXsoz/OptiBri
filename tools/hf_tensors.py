@@ -10,12 +10,19 @@ os.makedirs(CACHE, exist_ok=True)
 _hdr = {}
 
 def _get(url, a, b):
+    """Range GET with backoff; honours Retry-After on HTTP 429 (Hugging Face rate limit)."""
+    import time, random, urllib.error
     r = urllib.request.Request(url, headers={"Range": f"bytes={a}-{b}"})
-    for i in range(5):
+    for i in range(12):
         try:
             return urllib.request.urlopen(r, timeout=120).read()
-        except Exception:
-            if i == 4: raise
+        except Exception as e:
+            if i == 11: raise
+            wait = min(120, 2 ** i) * (0.5 + random.random())
+            if isinstance(e, urllib.error.HTTPError) and e.code == 429:
+                ra = e.headers.get("Retry-After")
+                if ra and ra.isdigit(): wait = max(wait, int(ra))
+            time.sleep(wait)
 
 def weight_map():
     p = os.path.join(CACHE, "index.json")
