@@ -35,7 +35,7 @@
   - The `route-agree` metric compares sorted index lists position by position and **understates** the true overlap. Replace it with set overlap.
 
 ### Notes for the next session
-- The container is ephemeral. If `scratchpad/glmcache` is gone, rerun `calib_data.py` (seconds). `run_e2e.py` must restart from layer 0 (~2 h for 78 layers).
+- The container is ephemeral. If `scratchpad/glmcache` is gone, rerun `calib_data.py` (seconds). `run_e2e.py` must restart from layer 0 (~5 h for 78 layers with 4 variants).
 - Avoid `pkill -f <pattern>` inside a Bash call: it matches and kills the calling shell. Use `pgrep -af "^python3 ..."`.
 - The repo has no `main` branch yet, so no PR could be opened (a PR needs a base branch).
 
