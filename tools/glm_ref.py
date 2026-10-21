@@ -20,11 +20,18 @@ SCALE = (NOPE + ROPE) ** -0.5
 _wm = H.weight_map() if "GLM_CFG" not in os.environ else None
 
 LOCAL = None   # optional {name: tensor} source, used by the self-test against transformers
+# bf16 matmuls (AMX on the cloud CPU, ~100x faster than fp32); residual stream, norms and router stay fp32.
+BF16 = os.environ.get("GLM_BF16", "1") == "1"
 
 def W(name):
-    if LOCAL is not None:
-        return LOCAL[name].float()
-    return torch.from_numpy(H.fetch(name, _wm, cache=False))
+    w = LOCAL[name].float() if LOCAL is not None else torch.from_numpy(H.fetch(name, _wm, cache=False))
+    if BF16 and w.dim() == 2 and not name.endswith("mlp.gate.weight"):
+        w = w.to(torch.bfloat16)          # exact: checkpoint weights are bf16
+    return w
+
+def mm(x, w):
+    """x @ w.T; in bf16 when w is bf16 (fp32 accumulate inside oneDNN), result fp32."""
+    return (x.to(w.dtype) @ w.T).float() if w.dtype != x.dtype else x @ w.T
 
 def rms(x, w):
     return w * (x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + EPS))
@@ -41,22 +48,22 @@ def rot(x, cos, sin):                                 # interleaved pairs, outpu
 def attention(L, x, cs):
     p = f"model.layers.{L}.self_attn."
     T = x.shape[0]; cos, sin = cs
-    q = rms(x @ W(p + "q_a_proj.weight").T, W(p + "q_a_layernorm.weight")) @ W(p + "q_b_proj.weight").T
+    q = mm(rms(mm(x, W(p + "q_a_proj.weight")), W(p + "q_a_layernorm.weight")), W(p + "q_b_proj.weight"))
     q = q.view(T, NH, NOPE + ROPE).transpose(0, 1)                        # NH,T,256
     qn, qr = q.split([NOPE, ROPE], -1)
-    ckv = x @ W(p + "kv_a_proj_with_mqa.weight").T
+    ckv = mm(x, W(p + "kv_a_proj_with_mqa.weight"))
     kp, kr = ckv.split([KVR, ROPE], -1)
-    kv = (rms(kp, W(p + "kv_a_layernorm.weight")) @ W(p + "kv_b_proj.weight").T).view(T, NH, NOPE + VD).transpose(0, 1)
+    kv = mm(rms(kp, W(p + "kv_a_layernorm.weight")), W(p + "kv_b_proj.weight")).view(T, NH, NOPE + VD).transpose(0, 1)
     kn, v = kv.split([NOPE, VD], -1)
     qr = rot(qr, cos, sin); kr = rot(kr, cos, sin).unsqueeze(0).expand(NH, T, ROPE)
     qq = torch.cat([qn, qr], -1); kk = torch.cat([kn, kr], -1)
     o = torch.nn.functional.scaled_dot_product_attention(qq.unsqueeze(0), kk.unsqueeze(0), v.unsqueeze(0),
                                                          is_causal=True, scale=SCALE)[0]
-    return o.transpose(0, 1).reshape(T, NH * VD) @ W(p + "o_proj.weight").T
+    return mm(o.transpose(0, 1).reshape(T, NH * VD), W(p + "o_proj.weight"))
 
 def mlp(prefix, x):
-    g = x @ W(prefix + "gate_proj.weight").T; u = x @ W(prefix + "up_proj.weight").T
-    return (torch.nn.functional.silu(g) * u) @ W(prefix + "down_proj.weight").T
+    g = mm(x, W(prefix + "gate_proj.weight")); u = mm(x, W(prefix + "up_proj.weight"))
+    return mm(torch.nn.functional.silu(g) * u, W(prefix + "down_proj.weight"))
 
 def route(L, x):
     p = f"model.layers.{L}.mlp.gate."
@@ -95,7 +102,7 @@ def moe(L, x, hook=None):
         tok, slot = (idx == e).nonzero(as_tuple=True)
         xe = x[tok]
         if hook: hook(L, e, xe, (g, u, d))
-        ye = (torch.nn.functional.silu(xe @ g.T) * (xe @ u.T)) @ d.T
+        ye = mm(torch.nn.functional.silu(mm(xe, g)) * mm(xe, u), d)
         out.index_add_(0, tok, ye * w[tok, slot, None])
     return out, idx
 
@@ -116,4 +123,4 @@ def embed(ids):
     return torch.from_numpy(np.stack([rows[i] for i in ids]))
 
 def head(h):
-    return rms(h, W("model.norm.weight")) @ W("lm_head.weight").T
+    return mm(rms(h, W("model.norm.weight")), W("lm_head.weight"))

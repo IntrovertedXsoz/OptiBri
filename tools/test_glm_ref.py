@@ -1,5 +1,6 @@
 """Self-test: glm_ref.py must match transformers' GlmMoeDsaForCausalLM on a tiny random model."""
 import json, os, tempfile, torch
+os.environ.setdefault("GLM_BF16", "0")   # exactness test runs the fp32 path
 cfg = json.load(open(os.path.join(os.path.dirname(__file__), "glm52_config.json")))
 n = 5
 cfg.update(hidden_size=64, num_attention_heads=4, num_key_value_heads=4, qk_nope_head_dim=12, qk_rope_head_dim=4,
