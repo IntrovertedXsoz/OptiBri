@@ -6,7 +6,7 @@ Usage: python exp2_activation_aware.py FWD_DIR LAYER
 """
 import os, sys, numpy as np, torch
 import glm_ref as G
-torch.set_num_threads(os.cpu_count())
+torch.set_num_threads(int(os.environ.get("THREADS", os.cpu_count())))
 D, L = sys.argv[1], int(sys.argv[2])
 X = torch.from_numpy(np.load(f"{D}/x{L}.npy").astype(np.float32))
 idx = torch.from_numpy(np.load(f"{D}/idx{L}.npy").astype(np.int64))
