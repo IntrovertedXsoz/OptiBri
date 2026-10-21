@@ -1,11 +1,19 @@
 """Quantizers shared by experiments: block-Hadamard rotation, MSE-optimal uniform RTN, layer-shared VQ."""
 import math, torch
 
-def fwht(x):                                    # orthonormal Walsh-Hadamard on the last dim (power of 2)
-    n = x.shape[-1]; h = 1; y = x.clone()
-    while h < n:
-        y = y.view(*x.shape[:-1], n // (2 * h), 2, h)
-        y = torch.stack([y[..., 0, :] + y[..., 1, :], y[..., 0, :] - y[..., 1, :]], -2); h *= 2
+def _had(n):
+    h = torch.ones(1, 1)
+    while h.shape[0] < n: h = torch.cat([torch.cat([h, h], 1), torch.cat([h, -h], 1)], 0)
+    return h
+_HK = {}
+def fwht(x):
+    """Orthonormal Walsh-Hadamard on the last dim (power of 2), via H_n = H_a (x) H_b: two small BLAS matmuls."""
+    n = x.shape[-1]
+    if n not in _HK:
+        a = 2 ** (int(math.log2(n)) // 2); _HK[n] = (_had(a), _had(n // a))
+    ha, hb = _HK[n]; a, b = ha.shape[0], hb.shape[0]
+    y = x.reshape(-1, a, b)
+    y = torch.matmul(torch.matmul(ha, y), hb)       # H_a Y H_b  (both symmetric)
     return y.reshape(x.shape) / math.sqrt(n)
 
 SIGNS = {}
@@ -22,6 +30,11 @@ def rtn(w, b, gs):
     return (((wg - lo) / s).round().clamp(0, 2 ** b - 1) * s + lo).reshape(o, i)
 
 STEP = {2: 0.9957, 3: 0.5860, 4: 0.3352}         # MSE-optimal uniform step for a unit Gaussian (Max 1960)
+def hrtn_rot(w, b):
+    """Q(rotate(w)) kept in the rotated basis: use as  rotate(x) @ hrtn_rot(w, b).T  (no unrotation needed)."""
+    r = rotate(w); q = 2 ** (b - 1); s = r.pow(2).mean(1, keepdim=True).sqrt() * STEP[b]
+    return ((r / s - 0.5).round_().clamp_(-q, q - 1).add_(0.5)).mul_(s)
+
 def hrtn(w, b):
     r = rotate(w); q = 2 ** (b - 1)              # 2^b levels at (k + 0.5) * step, k = -q..q-1
     s = r.pow(2).mean(1, keepdim=True).sqrt() * STEP[b]

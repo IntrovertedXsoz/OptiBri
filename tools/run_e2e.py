@@ -8,10 +8,11 @@ Resumable. Usage: python run_e2e.py OUT
 """
 import os, sys, json, time, numpy as np, torch
 import glm_ref as G
-from quant import hrtn            # rotation + MSE-optimal uniform quantizer (tested in exp4)
+from quant import hrtn_rot, rotate            # rotation + MSE-optimal uniform quantizer (tested in exp4)
 torch.set_num_threads(int(os.environ.get("THREADS", os.cpu_count())))
 OUT = sys.argv[1]; os.makedirs(OUT, exist_ok=True)
-VARIANTS = {"ref": None, "hrtn3": lambda w: hrtn(w, 3), "hrtn2": lambda w: hrtn(w, 2)}
+# variants return weights in the rotated basis; activations are rotated instead of unrotating weights
+VARIANTS = {"ref": None, "hrtn3": lambda w: hrtn_rot(w, 3), "hrtn2": lambda w: hrtn_rot(w, 2)}
 calib = np.load(os.path.join(os.environ["GLM_CACHE"], "calib_8x1024.npy"))
 ids = np.stack([calib[3][:512], calib[7][:512]])      # one Wikipedia, one Python-code sequence
 S, T = ids.shape; cs = G.rope_cs(T)
@@ -41,8 +42,11 @@ def moe_multi(L, xs):
             idx, wts = routes[k]; tok, slot = (idx == e).nonzero(as_tuple=True)
             if len(tok) == 0: continue
             if k not in qcache: qcache[k] = w3 if VARIANTS[k] is None else [VARIANTS[k](w) for w in w3]
-            g, u, d = qcache[k]; xe = x[tok]
-            out[k].index_add_(0, tok, ((torch.nn.functional.silu(xe @ g.T) * (xe @ u.T)) @ d.T) * wts[tok, slot, None])
+            g, u, d = qcache[k]; xe = x[tok]; rot = VARIANTS[k] is not None
+            if rot: xe = rotate(xe)
+            a = torch.nn.functional.silu(xe @ g.T) * (xe @ u.T)
+            if rot: a = rotate(a)
+            out[k].index_add_(0, tok, (a @ d.T) * wts[tok, slot, None])
     agree = {k: (routes[k][0].sort(-1).values == routes["ref"][0].sort(-1).values).float().mean().item() for k in xs}
     return out, agree
 
