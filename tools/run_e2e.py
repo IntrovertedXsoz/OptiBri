@@ -12,7 +12,7 @@ from quant import hrtn_rot, rotate            # rotation + MSE-optimal uniform q
 torch.set_num_threads(int(os.environ.get("THREADS", os.cpu_count())))
 OUT = sys.argv[1]; os.makedirs(OUT, exist_ok=True)
 # variants return weights in the rotated basis; activations are rotated instead of unrotating weights
-q = lambda b: (lambda w: hrtn_rot(w.float(), b).to(w.dtype))
+q = lambda b: (lambda w: hrtn_rot(w, b).to(w.dtype))
 VARIANTS = {"ref": None, "hrtn3": q(3), "hrtn2": q(2), "top4": None}
 TOPK = {"top4": 4}   # bf16 experts, but only the 4 best-scored of the 8 routed experts (weights renormalized)
 calib = np.load(os.path.join(os.environ["GLM_CACHE"], "calib_8x1024.npy"))

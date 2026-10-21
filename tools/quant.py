@@ -11,16 +11,16 @@ def fwht(x):
     n = x.shape[-1]
     if n not in _HK:
         a = 2 ** (int(math.log2(n)) // 2); _HK[n] = (_had(a), _had(n // a))
-    ha, hb = _HK[n]; a, b = ha.shape[0], hb.shape[0]
+    ha, hb = (h.to(x.dtype) for h in _HK[n]); a, b = ha.shape[0], hb.shape[0]
     y = x.reshape(-1, a, b)
-    y = torch.matmul(torch.matmul(ha, y), hb)       # H_a Y H_b  (both symmetric)
-    return y.reshape(x.shape) / math.sqrt(n)
+    y = torch.matmul(torch.matmul(ha, y), hb)       # H_a Y H_b (both symmetric); bf16 input -> AMX matmul
+    return y.reshape(x.shape) * (1.0 / math.sqrt(n))
 
 SIGNS = {}
 def rotate(w):                                  # W -> W R^T with R = blockdiag(H * diag(signs)), blocks of 2048
     i = w.shape[1]
     if i not in SIGNS: SIGNS[i] = (torch.randint(0, 2, (i,)) * 2 - 1).float()
-    return fwht((w * SIGNS[i]).view(w.shape[0], i // 2048, 2048)).view_as(w)
+    return fwht((w * SIGNS[i].to(w.dtype)).view(w.shape[0], i // 2048, 2048)).view_as(w)
 def unrotate(w):
     i = w.shape[1]; return fwht(w.view(w.shape[0], i // 2048, 2048)).view_as(w) * SIGNS[i]
 
@@ -32,8 +32,9 @@ def rtn(w, b, gs):
 STEP = {2: 0.9957, 3: 0.5860, 4: 0.3352}         # MSE-optimal uniform step for a unit Gaussian (Max 1960)
 def hrtn_rot(w, b):
     """Q(rotate(w)) kept in the rotated basis: use as  rotate(x) @ hrtn_rot(w, b).T  (no unrotation needed)."""
-    r = rotate(w); q = 2 ** (b - 1); s = r.pow(2).mean(1, keepdim=True).sqrt() * STEP[b]
-    return ((r / s - 0.5).round_().clamp_(-q, q - 1).add_(0.5)).mul_(s)
+    r = rotate(w).float(); q = 2 ** (b - 1)
+    s = torch.linalg.vector_norm(r, dim=1, keepdim=True).mul_(STEP[b] / math.sqrt(r.shape[1]))
+    return r.div_(s).floor_().clamp_(-q, q - 1).add_(0.5).mul_(s)   # floor(x) == round(x - 0.5) off ties
 
 def hrtn(w, b):
     r = rotate(w); q = 2 ** (b - 1)              # 2^b levels at (k + 0.5) * step, k = -q..q-1
