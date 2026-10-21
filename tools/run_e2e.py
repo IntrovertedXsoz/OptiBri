@@ -53,8 +53,9 @@ def moe_multi(L, xs):
             a = torch.nn.functional.silu(G.mm(xe, g)) * G.mm(xe, u)
             if rot: a = rotate(a)
             out[k].index_add_(0, tok, G.mm(a, d) * wts[tok, slot, None])
-    agree = {k: (routes[k][0].sort(-1).values == routes["ref"][0].sort(-1).values).float().mean().item()
-             for k in xs if k not in TOPK}
+    def overlap(a, b):   # fraction of b's experts (per token) also chosen in a
+        return (a[:, :, None] == b[:, None, :]).any(-1).float().mean().item()
+    agree = {k: overlap(routes[k][0], routes["ref"][0]) for k in xs if k not in TOPK}
     return out, agree
 
 NL = G.CFG["num_hidden_layers"]
