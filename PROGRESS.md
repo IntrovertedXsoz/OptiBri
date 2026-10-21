@@ -42,3 +42,8 @@
 ## Next goal (session 1, Wed Oct 21, 18:02 ET)
 First: if the container survived, read `e2e/result.json` (or let `run_e2e.py` resume). If it was reset, restart `run_e2e.py` immediately (~5 h; it will span sessions).
 Finish the end-to-end curve: get KL / top-1 / perplexity for 2- and 3-bit experts. This sets the per-expert error budget that "97% quality" allows. Then test the strongest ~2.2 bpw quantizer that fits the 221 GB disk (activation-aware rounding plus higher-dimensional codebooks/trellis) end to end.
+
+## Session 1 — Wed Oct 21, 18:03 ET
+**Goal:** get the end-to-end numbers (KL / top-1 / perplexity vs the original) for 3-bit experts, 2-bit experts and top-4 routing. This is the first measurement that ties compression to final quality.
+- 18:03: the container survived, but the overnight run had stopped after layer 12 (background processes don't survive the session going idle). Resumed from saved state.
+- Download speed today: 226 MB/s with 16 parallel fetches, 304 MB/s with 32, 221 MB/s with 64. Expert prefetch raised from 8 to 24 in flight.

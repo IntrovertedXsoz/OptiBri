@@ -67,7 +67,7 @@ def route(L, x):
 
 class ExpertStream:
     """Fetch expert weights with several parallel downloads (bounded lookahead) so download overlaps compute."""
-    def __init__(self, L, experts, ahead=8):
+    def __init__(self, L, experts, ahead=24):
         import concurrent.futures as cf, collections
         self.L, self.experts, self.ahead = L, list(experts), ahead
         self.ex = cf.ThreadPoolExecutor(ahead); self.pend = collections.deque()
