@@ -67,3 +67,6 @@ Only the routed experts are changed; everything else is the original bf16.
 
 ## Next goal (session 2, Thu Oct 22, 18:02 ET)
 **Find where the damage comes from.** Run one end-to-end pass with variants that each quantize (3-bit) only one slice of layers: 3–20, 21–40, 41–60, 61–77. Log the per-expert output error per layer to find the worst experts and rows. If a few layers/experts dominate, test keeping them at higher precision. Use 2 × 512 tokens as before. Run time ~2 h at the current ~110 s/layer.
+
+## Session 2 — Thu Oct 22, 18:03 ET
+**Goal:** find where the 3-bit damage comes from. One end-to-end pass with 3-bit experts applied to one layer slice per variant (3–20, 21–40, 41–60, 61–77), plus a per-layer/per-expert local damage log (`local_err.json`).
