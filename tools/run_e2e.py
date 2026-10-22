@@ -76,14 +76,23 @@ for L in range(start, NL):
     print(f"layer {L} {time.time()-t0:.0f}s hidden-dev " + " ".join(f"{k}={v:.3f}" for k, v in dev.items())
           + " route-agree " + " ".join(f"{k}={v:.3f}" for k, v in agree.items() if k != "ref"), flush=True)
 
-memo.clear(); res = {}
-logp = {k: torch.log_softmax(G.head(h[k].view(S * T, -1)), -1) for k in VARIANTS}
-tgt = torch.from_numpy(ids[:, 1:].reshape(-1)); keep = torch.ones(S, T, dtype=torch.bool); keep[:, -1] = False
-keep = keep.flatten()
-for k in VARIANTS:
-    lp = logp[k][keep]; lr = logp["ref"][keep]
-    nll = -lp.gather(1, tgt[:, None]).mean().item()
-    kl = (lr.exp() * (lr - lp)).sum(-1)
-    res[k] = {"ppl": float(np.exp(nll)), "kl_mean": kl.mean().item(), "kl_p99": kl.quantile(0.99).item(),
-              "top1_agree": (lp.argmax(-1) == lr.argmax(-1)).float().mean().item()}
+memo.clear(); G.memo = None
+# Final metrics, computed in token chunks so the 154,880-wide logits never all sit in memory at once.
+wn, wh = W("model.norm.weight"), W("lm_head.weight")
+tgt = torch.from_numpy(ids[:, 1:].reshape(-1))
+hs = {k: h[k][:, :-1].reshape(-1, h[k].shape[-1]) for k in VARIANTS}      # positions that have a next token
+acc = {k: {"nll": 0.0, "kl": [], "top1": 0} for k in VARIANTS}
+for i in range(0, len(tgt), 128):
+    lr = None
+    for k in VARIANTS:
+        lp = torch.log_softmax(G.mm(G.rms(hs[k][i:i + 128], wn), wh), -1)
+        if k == "ref": lr = lp
+        acc[k]["nll"] += -lp.gather(1, tgt[i:i + 128, None]).sum().item()
+        acc[k]["kl"].append((lr.exp() * (lr - lp)).sum(-1))
+        acc[k]["top1"] += (lp.argmax(-1) == lr.argmax(-1)).sum().item()
+n = len(tgt); res = {}
+for k, a in acc.items():
+    kl = torch.cat(a["kl"])
+    res[k] = {"ppl": float(np.exp(a["nll"] / n)), "kl_mean": kl.mean().item(), "kl_p99": kl.quantile(0.99).item(),
+              "top1_agree": a["top1"] / n}
 print(json.dumps(res, indent=1)); json.dump(res, open(os.path.join(OUT, "result.json"), "w"), indent=1)

@@ -47,3 +47,23 @@ Finish the end-to-end curve: get KL / top-1 / perplexity for 2- and 3-bit expert
 **Goal:** get the end-to-end numbers (KL / top-1 / perplexity vs the original) for 3-bit experts, 2-bit experts and top-4 routing. This is the first measurement that ties compression to final quality.
 - 18:03: the container survived, but the overnight run had stopped after layer 12 (background processes don't survive the session going idle). Resumed from saved state.
 - Download speed today: 226 MB/s with 16 parallel fetches, 304 MB/s with 32, 221 MB/s with 64. Expert prefetch raised from 8 to 24 in flight.
+- Speedups: bf16 matmuls on the cloud CPU's AMX unit; the profile showed 96% of time in my quantizer, so I moved the rotation to bf16 and made rounding in-place (same error, 0.3443 vs 0.3442). 255 s → ~110 s per layer.
+- Hit Hugging Face HTTP 429 at layer 68; added backoff honouring Retry-After. The final step ran out of memory (4 variants × full logits ≈ 14 GB); metrics are now computed in 128-token chunks.
+
+### Result: first end-to-end quality numbers (`results_e2e_v1.json`, 1,022 tokens: Wikipedia + Python)
+Only the routed experts are changed; everything else is the original bf16.
+| Variant | Perplexity | Δ vs original | KL mean | KL p99 | Top-1 agreement |
+|---|---|---|---|---|---|
+| original | 1.788 | — | 0 | 0 | 100% |
+| hrtn3: experts 3.0 bpw (Hadamard + optimal RTN, one scale per row) | 1.982 | +10.8% | 0.142 | 1.98 | 91.7% |
+| hrtn2: experts 2.0 bpw | 2.756 | +54% | 0.555 | 5.01 | 76.2% |
+| top4: bf16 experts, 4 of 8 routed | 2.189 | +22% | 0.276 | 3.62 | 86.5% |
+
+**What it means (honest):**
+- None of these is near the 97% target. Good 4-bit-class quantization of large models usually lands around KL 0.01–0.03, so this simple quantizer is far from good enough even at 3 bits.
+- Halving the experts per token costs about as much as dropping experts to ~2.5 bits. "Fewer experts" isn't a free speed lever. It might still work *adaptively* (drop only low-weight experts).
+- Per-layer drift was very non-uniform (layer 8 doubled the error in one step). Most of the damage may come from a few sensitive layers, experts or rows. That's the most promising lead: protecting a small part of the model costs few bytes.
+- The quantizer here is the crudest reasonable one: one scale per 6144-wide row, no activation awareness. Group scales, activation-aware rounding (GPTQ/LDLQ) and codebooks/trellis each give known, large error reductions. They haven't been applied end to end yet.
+
+## Next goal (session 2, Thu Oct 22, 18:02 ET)
+**Find where the damage comes from.** Run one end-to-end pass with variants that each quantize (3-bit) only one slice of layers: 3–20, 21–40, 41–60, 61–77. Log the per-expert output error per layer to find the worst experts and rows. If a few layers/experts dominate, test keeping them at higher precision. Use 2 × 512 tokens as before. Run time ~2 h at the current ~110 s/layer.
