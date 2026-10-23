@@ -70,3 +70,24 @@ Only the routed experts are changed; everything else is the original bf16.
 
 ## Session 2 — Thu Oct 22, 18:03 ET
 **Goal:** find where the 3-bit damage comes from. One end-to-end pass with 3-bit experts applied to one layer slice per variant (3–20, 21–40, 41–60, 61–77), plus a per-layer/per-expert local damage log (`local_err.json`).
+- Run took ~100 s/layer. The final step hit out-of-memory again (5 variants after a long run); rerunning in a fresh process from the saved state completed it.
+
+### Result: where the 3-bit damage comes from (`results_e2e_slices.json`, `results_local_err_3bit.json`)
+3-bit experts (same quantizer as v1) applied to one layer slice at a time:
+| Slice quantized | Perplexity | KL mean | KL p99 | Top-1 agreement |
+|---|---|---|---|---|
+| none (ref) | 1.785 | 0 | 0 | 100% |
+| layers 3–20 | 1.782 | 0.024 | 0.25 | 97.0% |
+| layers 21–40 | 1.790 | 0.049 | 0.64 | 96.1% |
+| layers 41–60 | 1.822 | 0.063 | 0.94 | 94.0% |
+| layers 61–77 | 1.820 | 0.039 | 0.62 | 95.1% |
+- Slice KLs add up roughly to the all-layer KL (0.175 vs 0.142). **The damage is spread across all depths** (middle layers worst), not concentrated in a few layers.
+- Within layers (local 3-bit error of each expert on the original model's own inputs): layer local error 0.15–0.32 (median 0.27). **The worst 5% of experts carry 34% of a layer's damage, the worst 10% carry 47%.**
+- **Super-weight experts confirmed:** a single expert carries 53% of the damage in layer 8, 35% in layer 9 and 55% in layer 77. This explains the layer-8 jump seen in v1.
+- So protecting the worst ~10% of experts per layer could remove about half the damage for little disk. But every layer is damaged, so the base quantizer must also improve (v1 uses one scale per 6144-wide row and no activation awareness).
+- Caution: the worst experts were identified on the same tokens that are evaluated. Re-select them on *different* text before trusting a protection result.
+
+## Next goal (session 3, Fri Oct 23, 18:02 ET)
+**Combine a better base quantizer with expert protection and measure it end to end.**
+1. Pick the protected experts from *different* calibration text (calib seqs 0 and 6, not the eval seqs 3 and 7): a cheap ref-only pass logging local damage, or reuse the local log machinery.
+2. End-to-end variants (all experts compressed): (a) 3-bit with group scales (g=128) after rotation; (b) (a) + worst 10% experts per layer kept at 4-bit; (c) a ~2.3 bpw mix: 2-bit base with group scales + worst ~15% at 4-bit. Report bits/weight including scales.
